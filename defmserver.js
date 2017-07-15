@@ -15,7 +15,8 @@ var express = require('express'),
     Deque = require("double-ended-queue"),
     sizeOf = require('image-size'),
     svg2gcode = require('./lib/svg2gcode'),
-	pic2gcode = require('./lib/pic2gcode');
+	pic2gcode = require('./lib/pic2gcode'),
+	potrace = require('potrace');
 //argv
 	argv.serverPort		=	argv.serverPort		|| 9090;						//DEFM Server nodejs port
 	argv.minDistance	=	argv.minDistance	|| 50;							//queue will set to empty if the distance from now laser position to goal position is less than 6em					
@@ -39,6 +40,7 @@ var express = require('express'),
 	argv.feedRate		=	(argv.feedRate != undefined) ? argv.feedRate : -1;								//-1 means fetch from sdcard
 	argv.maxLaserPower	= 	argv.maxLaserPower	|| 100;
 	argv.resolution		=	argv.resolution		|| px2mm;		//picture 2 gcode resolution
+	argv.scale			= 	argv.scale			|| 100;			//scale picture by percent
 
 //var
 var	gcodeQueue	= 	new Deque([]),
@@ -57,6 +59,7 @@ var	gcodeQueue	= 	new Deque([]),
 	timer2		=	0,
 	timer3		=	phpjs.time(),
 	socketClientCount	= 0,
+	copiesDrawing = 1,
 	// lcdBusy 	= false,
 	//galileo pinout
 	// fanPin				=	7,
@@ -105,12 +108,14 @@ var _getIpAddress_idx = 0;
 // 	_getIpAddress_idx = (_getIpAddress_idx + 1) % count;
 // 	return ip[_getIpAddress_idx];
 // }	
-var aa=false;
 var file;
 var filepath;
 var options;
 var isPICfile;
-
+var content;
+var fileaa;
+var isConvert = false;
+var toSVGContent = '';
 app.use('/upload', express.static(__dirname + '/upload'));
 
 io.sockets.on('connection', function (socket) {
@@ -129,6 +134,7 @@ io.sockets.on('connection', function (socket) {
 	uploader.on("start", function(event) {
 		console.log("uploading....");
 		pic2gcode.clear();
+		isConvert = false;
 		event.file.name = phpjs.str_replace("'", "", event.file.name);
 		var file = event.file;
 		var fileSize = file.size;
@@ -139,11 +145,10 @@ io.sockets.on('connection', function (socket) {
 	});
     
 	 // Do something when a file is saved:
-	var __upload_complete = function(file, content, filepath,aa, isPic) {
-		console.log("Is pic"+isPic);
+	var __upload_complete = function(file, content, filepath, isPic) {
 		addQueue(content);
+		
 		if (!isPic) {
-			console.log("!isPic");
 			sendQueue();
 			//fs.unlink(filepath);
 		} else
@@ -168,15 +173,18 @@ io.sockets.on('connection', function (socket) {
 			if (isPICfile) {
 				checkPic(file,filepath,options);
 			} else {
-				var content = fs.readFileSync(filepath);
-				socket.emit("percent");
+				content = fs.readFileSync(filepath);
+			//	socket.emit("percent");
+				
 				if (!isGCODEfile) {
 					checkSVG(file,filepath,options);
-				} else
-					content = content.toString();
+				} else{
+				content = content.toString();
 				if (ext != 'svg')
 					SVGcontent = "";
 				__upload_complete(file, content, filepath);
+				}
+					
 			}
 		}, file.size / 1024 / 2);
 
@@ -203,19 +211,22 @@ io.sockets.on('connection', function (socket) {
 								socket.emit("percent", percent);
 							},
 							complete: function (gcode) {
-								__upload_complete(file, gcode, filepath,true);
+								fileaa = filepath;	 
+								__upload_complete(file, gcode, filepath);
 							}
 						});
 					});
 				}
 	}
-	function checkSVG(file,filepath,options){
-		var content = fs.readFileSync(filepath);
-		var SVGcontent = content.toString();					
+	function checkSVG(file,filepath,options,isContent){
+		socket.emit("percent");
+		var content;
+		if(isContent) content = file;
+		else	content = fs.readFileSync(filepath); 				
+		var SVGcontent = content.toString();
 		content = svg2gcode.svg2gcode(SVGcontent, options, function (percent) {
 		});
-				console.log("connet"+content);
-
+		SVGcontent = "";
 		__upload_complete(file, content, filepath);
 	}
 
@@ -249,7 +260,8 @@ io.sockets.on('connection', function (socket) {
 	});
 	socket.on('cmd', function (cmd) {
 		cmd = cmd || "";
-		cmd = phpjs.str_replace(['"', "'"], '', cmd);
+		console.log(cmd);
+		cmd = phpjs.str_repflace(['"', "'"], '', cmd);
 		write2serial(cmd);
 	});
 	socket.on('resolution', function (resolution) {
@@ -258,17 +270,66 @@ io.sockets.on('connection', function (socket) {
 	});
 
     socket.on('imagesize',function(size){
-		options.scale = size;
+		if(size <0 || size >400 || size =='') size = 100;	
+		console.log("SizeSVg"+size);	
 		if(isPICfile){
-			console.log("PIC size");
+			argv.scale = size;
+			options = argv;
 			checkPic(file,filepath,options);
 		}else{
-			checkSVG(file,filepath,options);
+			argv.scale = size;
+			options = argv;
+			console.log("SizeSVg"+size);
+			if(isConvert) checkSVG(toSVGContent,filepath,options,true);
+			else checkSVG(file,filepath,options);
 
 		}
-		// content = svg2gcode.svg2gcode(contentt, options);
-		// __upload_complete(fi, content, fp,true);
+
 	});
+
+    socket.on('convertToSvg',function(type){
+		if(!isPICfile && !isConvert) return;
+		var type = type || 0;
+		var filepaths = fileaa;
+		isPICfile = false;
+		isConvert = true;
+		options = argv;
+	//	console.log(options);
+		switch(type){
+			case 1:
+				var params = {
+				// threshold: 200
+				};
+				potrace.trace(filepaths, function(err, svg) {
+				if (err) {console.log("Convert error"); return;};
+				toSVGContent = svg;
+				checkSVG(toSVGContent,filepaths,options, true);
+				});
+				break;
+			case 2:
+				var posterizer = new potrace.Posterizer();
+				posterizer.loadImage(filepaths, function(err) {
+				if (err) {console.log("Convert error"); return;};
+				posterizer.setParameters({
+					steps: 3,
+					threshold: 200,
+					fillStrategy: potrace.Posterizer.FILL_MEAN,
+				});
+				toSVGContent = posterizer.getSVG(); 
+				checkSVG(toSVGContent,filepaths,options, true);
+				});
+				break;
+			case 0:
+				isConvert = false;
+				isPICfile =true;
+				checkPic(file,filepath,options);
+				break;
+
+		}
+
+	});
+	
+
 	socket.on('maxLaserPower', function (power) {
 		power = phpjs.intval(power);
 		if (power < 0)
@@ -440,6 +501,7 @@ function start() {
 	machinePause	= false;
 	console.log("machine is running!");
 	timer2 = phpjs.time();
+	copiesDrawing = 1;
 	if (gcodeQueue.isEmpty() && gcodeDataQueue.length > 0)
 		gcodeQueue = new Deque(gcodeDataQueue.toArray());
 	write2serial_direct("~\n");
@@ -489,21 +551,24 @@ function getPosFromCommand(which, command) {
 
 function sendFirstGCodeLine() {
 	if (gcodeQueue.isEmpty()) {	// is empty list
+		if (copiesDrawing <= 1) {
+			finishSent();
+			return false;
+		} else {
 			gcodeQueue = new Deque(gcodeDataQueue.toArray());
+			copiesDrawing--;
+		}
 	}
-
 	//get the last command.
 	var command = gcodeQueue.shift();
 	//comment filter
 	command = command.split(';');
 	command = command[0];
-	
 	//if command is just a command, we check again
 	if (phpjs.strlen(command) <= 1 || command.indexOf(";") == 0)   //igrone comment line
 		return sendFirstGCodeLine();
 	command = phpjs.trim(command.replace(/[^a-zA-Z0-9-.$ ]/g, ''));
 	//write command to grbl
-	
 	
 	//convert command to upper style
 	command = phpjs.strtoupper(command);
@@ -513,7 +578,6 @@ function sendFirstGCodeLine() {
 	
 	command = phpjs.str_replace(" ", "", command);
 	write2serial(command);
-	
 	//get X and Y position from the command to count the length that the machine has run
 	var commandX = getPosFromCommand('X', command);
 	var commandY = getPosFromCommand('Y', command);
@@ -522,12 +586,13 @@ function sendFirstGCodeLine() {
 		currentDistance += newPos.distance(goalPos);
 		goalPos.set(newPos);
 	}
-	currentQueue++;	
+	currentQueue++;
 	return true;
 }
 function sendGcodeFromQueue() {
 	if ((currentDistance < maxDistance || currentQueue < minQueue || canSendImage) && currentQueue < maxQueue && __serial_queue.length < maxQueue)
-		sendFirstGCodeLine();
+	{	console.log("true")
+		sendFirstGCodeLine(); }
 }
 
 function receiveData(data) {
@@ -651,7 +716,8 @@ function __write2serial(free) {
 	var length = __preProcessQueue.length;
 	var func = __preProcessQueue.func;
 	var command = __preProcessQueue.command;
-
+	// console.log("L: " +length);
+	// console.log("SC: " +__sent_count);
 	__preProcessQueue.command = "";
 	sendGcode("ESP8266", command);
 
@@ -677,7 +743,7 @@ function write2serial_direct(command) {
 	sendGcode("ESP8266", command);
 }
 var W3CWebSocket = require('websocket').w3cwebsocket;
-var ws = new W3CWebSocket('ws://192.168.1.3:81/');
+var ws = new W3CWebSocket('ws://192.168.43.94:81/');
 var buffer ='';
 ws.onopen = function (e) {
 	console.log('open ws');
@@ -742,6 +808,7 @@ var AT_interval4 = setInterval(function () {
 		'tempGalileo': tempGalileo
 	});
 }, intervalTime4);
+  var sizeof = require('object-sizeof');
 
 function sendGcode(connect, gcode) {
 	if (gcode) {
@@ -753,6 +820,7 @@ function sendGcode(connect, gcode) {
 		} else if (connectVia == "ESP8266") {
 			if (ws) {
 				if (ws.readyState == '1') {
+					console.log("Type: "+sizeof(gcode)+", "+gcode);
 					ws.send(gcode);
 				} else {
 					// console.log("Unable to send gcode: Not connected to Websocket: " + gcode, errorcolor, "wifi");
@@ -763,4 +831,8 @@ function sendGcode(connect, gcode) {
 		}
 	}
 }
+
+
+
+
 console.log('Server runing port 9090');
