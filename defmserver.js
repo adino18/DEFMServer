@@ -18,6 +18,7 @@ var express = require('express'),
 	pic2gcode = require('./lib/pic2gcode'),
 	potrace = require('potrace');
 //argv
+	argv.machinehost	=	argv.machinehost || 'http://192.168.1.6:81';
 	argv.serverPort		=	argv.serverPort		|| 9090;						//DEFM Server nodejs port
 	argv.minDistance	=	argv.minDistance	|| 50;							//queue will set to empty if the distance from now laser position to goal position is less than 6em					
 	argv.maxDistance	=	argv.maxDistance	|| 100;							//queue is full if the distance they went enough 8mm or more one comand
@@ -97,6 +98,9 @@ var __sent_count_direct = 0;
 var __serial_queue	= [];
 var __preProcessQueue = {command: ""};
 var _getIpAddress_idx = 0;
+var W3CWebSocket = require('websocket').w3cwebsocket;
+
+var ws = new W3CWebSocket('ws://192.168.100.1:81');
 
 // function getIpAddress() {
 // 	var ip = sh.exec("ifconfig | grep -v 169.254.255.255 | grep -v 127.0.0.1 |  awk '/inet addr/{print substr($2,6)}'").stdout;	
@@ -121,6 +125,8 @@ app.use('/upload', express.static(__dirname + '/upload'));
 io.sockets.on('connection', function (socket) {
 	socketClientCount++;
 	//socket ip
+	
+	
     if(newConnection == ''){
             var newConnection = socket.request.connection.remoteAddress;
             console.log('New connection from ' + newConnection);
@@ -128,12 +134,16 @@ io.sockets.on('connection', function (socket) {
     }
     if(newConnection != socket.request.connection.remoteAddress)
      console.log('New connection from ' + socket.request.connection.remoteAddress);
+	
 	var uploader = new siofu();
     uploader.dir = "./upload";
     uploader.listen(socket);
+	
 	uploader.on("start", function(event) {
 		console.log("uploading....");
 		pic2gcode.clear();
+		start();
+		stop();
 		isConvert = false;
 		event.file.name = phpjs.str_replace("'", "", event.file.name);
 		var file = event.file;
@@ -261,7 +271,7 @@ io.sockets.on('connection', function (socket) {
 	socket.on('cmd', function (cmd) {
 		cmd = cmd || "";
 		console.log(cmd);
-		cmd = phpjs.str_repflace(['"', "'"], '', cmd);
+	//	cmd = phpjs.str_repflace(['"', "'"], '', cmd);
 		write2serial(cmd);
 	});
 	socket.on('resolution', function (resolution) {
@@ -289,7 +299,7 @@ io.sockets.on('connection', function (socket) {
 
     socket.on('convertToSvg',function(type){
 		if(!isPICfile && !isConvert) return;
-		var type = type || 0;
+		var type = parseInt(type) || 0;
 		var filepaths = fileaa;
 		isPICfile = false;
 		isConvert = true;
@@ -328,7 +338,13 @@ io.sockets.on('connection', function (socket) {
 		}
 
 	});
-	
+	socket.on('machinehost', function (address) {
+		argv.machinehost = address;
+		io.sockets.emit("settings", argv);
+		close();
+		open();
+		
+	});
 
 	socket.on('maxLaserPower', function (power) {
 		power = phpjs.intval(power);
@@ -591,8 +607,7 @@ function sendFirstGCodeLine() {
 }
 function sendGcodeFromQueue() {
 	if ((currentDistance < maxDistance || currentQueue < minQueue || canSendImage) && currentQueue < maxQueue && __serial_queue.length < maxQueue)
-	{	console.log("true")
-		sendFirstGCodeLine(); }
+		sendFirstGCodeLine();
 }
 
 function receiveData(data) {
@@ -637,7 +652,7 @@ function receiveData(data) {
 	} else if (data.indexOf('error') > -1) {
 		__sent_count--;
 		currentQueue--;
-		console.log("data: "+data);
+		//console.log("data: "+data);
 		io.sockets.emit('error', { id: 2, message: data });
 	} else {
 		io.sockets.emit('data', data);
@@ -726,7 +741,7 @@ function __write2serial(free) {
 var __lastCommand = "";
 function write2serial(command, func) {
    // console.log("func: "+ func);
-	if (__lastCommand != command || phpjs.strlen(command) < 5) {
+	if (__lastCommand != command || phpjs.strlen(command) < 215) {
 		//add command to serial queue		
 		__serial_queue.push({
 			'command': command + "\n",
@@ -742,20 +757,41 @@ function write2serial_direct(command) {
 	__sent_count_direct++;
 	sendGcode("ESP8266", command);
 }
-var W3CWebSocket = require('websocket').w3cwebsocket;
-var ws = new W3CWebSocket('ws://192.168.43.94:81/');
+
 var buffer ='';
-ws.onopen = function (e) {
-	console.log('open ws');
-	var interval = setInterval(function () {
+
+var open = function() {
+		var url = argv.machinehost;
+		ws = new W3CWebSocket('ws://'+url);
+		ws.onopen = onOpen;
+		ws.onclose = onClose;
+		ws.onmessage = onMessage;
+		ws.onerror = onError;
+	}
+var close = function() {
+		if (ws) {
+			console.log('CLOSING ...');
+			ws.close();
+		}
+	}
+var onOpen = function() {
+		console.log('Connect to machine');
+		var interval = setInterval(function () {
 		//increase the max element in the queue
 		write2serial("");
 		setTimeout(function () {
-			ws.send("?");
+			sendGcode("ESP8266","?");
 		});
 
 	}, intervalTime3);
-	ws.onmessage = function (e) {
+	ws.onmessage  = onMessage;
+	};
+var onClose = function() {
+		console.log('close machine');
+		ws = null;
+	};
+	
+var onMessage = function(e) {
 		var data = "";
 		if (e.data instanceof ArrayBuffer) {
 			var bytes = new Uint8Array(e.data);
@@ -775,11 +811,13 @@ ws.onopen = function (e) {
 				receiveData(response);
 			}
 		}
-	};
 };
-ws.onerror = function() {
-    console.log('Connection Error');
-};
+
+var onError = function(event) {
+		console.log("Can not connect to machine");
+	}
+
+
 var AT_interval1 = setInterval(function () {
 	write2serial("?");
 	if (is_running() && phpjs.time() - timer1 > intervalTime1)
@@ -820,7 +858,7 @@ function sendGcode(connect, gcode) {
 		} else if (connectVia == "ESP8266") {
 			if (ws) {
 				if (ws.readyState == '1') {
-					console.log("Type: "+sizeof(gcode)+", "+gcode);
+					//console.log("Type: "+sizeof(gcode)+", "+gcode);
 					ws.send(gcode);
 				} else {
 					// console.log("Unable to send gcode: Not connected to Websocket: " + gcode, errorcolor, "wifi");
