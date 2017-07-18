@@ -16,6 +16,7 @@ var express = require('express'),
     sizeOf = require('image-size'),
     svg2gcode = require('./lib/svg2gcode'),
 	pic2gcode = require('./lib/pic2gcode'),
+	exec 		=	require('child_process').exec,
 	potrace = require('potrace');
 //argv
 	argv.machinehost	=	argv.machinehost || 'http://192.168.1.6:81';
@@ -35,8 +36,8 @@ var express = require('express'),
 	argv.intervalTime5	=	argv.intervalTime5	|| 60;							//60s. Each 1 minute, we check grbl status to change to power saving mode
 	// argv.intervalTime6	=	argv.intervalTime6	|| 10000;						//10s. Each 10 seconds, we update Server log/ Galileo temperature OR Laser position once.
 	argv.maxFileSize 	= 	argv.maxFileSize	|| 1.5 * 1024 * 1024;			//unit: byte
-	argv.privateApiKey 	= 	argv.privateApiKey 	|| '80f9f6fa60371b14d5237645b79a72f6e016b08831ce12a3';		//privateApiKey (Ionic App), create your own or use my own
-	argv.ionicAppId		=	argv.ionicAppId 	|| '46a9aa6b';												//ionic app id (ionic app), create your own or use my own
+	argv.privateApiKey 	= 	argv.privateApiKey 	|| 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJhMWM0OTczYy02MTVhLTQ3YzMtYTQ1YS03YTEwMGY2YjliNDIifQ.7QLU4z0_lzAQhcF8QKmKyvb7TCx11Es9gDZ4bA0Yo2s';		//privateApiKey (Ionic App), create your own or use my own
+	argv.ionicAppId		=	argv.ionicAppId 	|| '3e97516a';												//ionic app id (ionic app), create your own or use my own
 	// argv.LCDcontroller 	= 	argv.LCDcontroller 	|| "PCF8574";												//default I2C Controller
 	argv.feedRate		=	(argv.feedRate != undefined) ? argv.feedRate : -1;								//-1 means fetch from sdcard
 	argv.maxLaserPower	= 	argv.maxLaserPower	|| 100;
@@ -511,8 +512,8 @@ function sendPushNotification(message) {
 			"alert": message 
 		}
 	};
-	// var command = "curl -u " + argv.privateApiKey + ": -H \"Content-Type: application/json\" -H \"X-Ionic-Application-Id: " + argv.ionicAppId + "\" https://push.ionic.io/api/v1/push -d '" + JSON.stringify(post_data) + "'";
-	// exec(command);
+	var command = "curl -u " + argv.privateApiKey + ": -H \"Content-Type: application/json\" -H \"X-Ionic-Application-Id: " + argv.ionicAppId + "\" https://push.ionic.io/api/v1/push -d '" + JSON.stringify(post_data) + "'";
+	exec(command);
 }
 
 function start() {	
