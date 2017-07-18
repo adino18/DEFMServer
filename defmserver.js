@@ -144,6 +144,7 @@ io.sockets.on('connection', function (socket) {
 		pic2gcode.clear();
 		start();
 		stop();
+		if(filepath) fs.unlink(filepath);
 		isConvert = false;
 		event.file.name = phpjs.str_replace("'", "", event.file.name);
 		var file = event.file;
@@ -339,10 +340,12 @@ io.sockets.on('connection', function (socket) {
 
 	});
 	socket.on('machinehost', function (address) {
-		argv.machinehost = address;
-		io.sockets.emit("settings", argv);
-		close();
-		open();
+		if(argv.machinehost != address){
+			argv.machinehost = address;
+			io.sockets.emit("settings", argv);
+			close();
+			open();
+		}
 		
 	});
 
@@ -784,7 +787,9 @@ var onOpen = function() {
 		});
 
 	}, intervalTime3);
-	ws.onmessage  = onMessage;
+
+	///
+		ws.onmessage  = onMessage;
 	};
 var onClose = function() {
 		console.log('close machine');
