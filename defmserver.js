@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const px2mm = 3.54328571429;
 var Infinity = 1e90;
+var MAXCOOR = {X:170, Y:280};
 //require
 var express = require('express'),
     app = express(),
@@ -13,7 +14,6 @@ var express = require('express'),
     Jimp = require('jimp'),
 	Vec2 = require('vec2'),
     Deque = require("double-ended-queue"),
-    sizeOf = require('image-size'),
     svg2gcode = require('./lib/svg2gcode'),
 	pic2gcode = require('./lib/pic2gcode'),
 	exec 		=	require('child_process').exec,
@@ -28,8 +28,8 @@ var express = require('express'),
 	argv.maxLengthCmd	=	argv.maxLengthCmd	|| 127;							//maxLength of batch process, in grbl wiki, it is 127
 	// argv.minCPUTemp		=	argv.minCPUTemp		|| 70;						// if galileo temp <= this => turn the fan off
 	// argv.maxCPUTemp		=	argv.maxCPUTemp		|| 80;						// if galileo temp > this => turn the fan on
-	argv.maxCoorX		=	argv.maxCoorX		|| 180;							// your max X coordinate 
-	argv.maxCoorY		=	argv.maxCoorY		|| 270;							// your max Y coordinate
+	argv.maxCoorX		=	argv.maxCoorX		|| MAXCOOR.X;							// your max X coordinate 
+	argv.maxCoorY		=	argv.maxCoorY		|| MAXCOOR.Y;							// your max Y coordinate
 	argv.intervalTime1	=	argv.intervalTime1	|| 10000;						//10s = 10000ms. Each 10s, we check grbl status once
 	argv.intervalTime3	= 	argv.intervalTime3	|| 610;						    //check current laser after 610ms
 	argv.intervalTime4	=	argv.intervalTime4	|| 30000;						//30s = 30000ms. Each 30s, we check server load once
@@ -39,7 +39,7 @@ var express = require('express'),
 	argv.privateApiKey 	= 	argv.privateApiKey 	|| 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJhMWM0OTczYy02MTVhLTQ3YzMtYTQ1YS03YTEwMGY2YjliNDIifQ.7QLU4z0_lzAQhcF8QKmKyvb7TCx11Es9gDZ4bA0Yo2s';		//privateApiKey (Ionic App), create your own or use my own
 	argv.ionicAppId		=	argv.ionicAppId 	|| '3e97516a';												//ionic app id (ionic app), create your own or use my own
 	// argv.LCDcontroller 	= 	argv.LCDcontroller 	|| "PCF8574";												//default I2C Controller
-	argv.feedRate		=	(argv.feedRate != undefined) ? argv.feedRate : -1;								//-1 means fetch from sdcard
+	argv.feedRate		=	(argv.feedRate != undefined) ? argv.feedRate : 100;								//-1 means fetch from sdcard
 	argv.maxLaserPower	= 	argv.maxLaserPower	|| 100;
 	argv.resolution		=	argv.resolution		|| px2mm;		//picture 2 gcode resolution
 	argv.scale			= 	argv.scale			|| 100;			//scale picture by percent
@@ -101,7 +101,7 @@ var __preProcessQueue = {command: ""};
 var _getIpAddress_idx = 0;
 var W3CWebSocket = require('websocket').w3cwebsocket;
 
-var ws = new W3CWebSocket('ws://192.168.100.1:81');
+var ws = new W3CWebSocket('ws://'+argv.machinehost);
 
 // function getIpAddress() {
 // 	var ip = sh.exec("ifconfig | grep -v 169.254.255.255 | grep -v 127.0.0.1 |  awk '/inet addr/{print substr($2,6)}'").stdout;	
@@ -118,7 +118,6 @@ var filepath;
 var options;
 var isPICfile;
 var content;
-var fileaa;
 var isConvert = false;
 var toSVGContent = '';
 app.use('/upload', express.static(__dirname + '/upload'));
@@ -127,11 +126,9 @@ io.sockets.on('connection', function (socket) {
 	socketClientCount++;
 	//socket ip
 	
-	
     if(newConnection == ''){
             var newConnection = socket.request.connection.remoteAddress;
             console.log('New connection from ' + newConnection);
-
     }
     if(newConnection != socket.request.connection.remoteAddress)
      console.log('New connection from ' + socket.request.connection.remoteAddress);
@@ -142,9 +139,8 @@ io.sockets.on('connection', function (socket) {
 	
 	uploader.on("start", function(event) {
 		console.log("uploading....");
+		console.log(argv.maxCoorX+","+argv.maxCoorY);
 		pic2gcode.clear();
-		start();
-		stop();
 		if(filepath) fs.unlink(filepath);
 		isConvert = false;
 		event.file.name = phpjs.str_replace("'", "", event.file.name);
@@ -157,18 +153,13 @@ io.sockets.on('connection', function (socket) {
 	});
     
 	 // Do something when a file is saved:
-	var __upload_complete = function(file, content, filepath, isPic) {
+	var __upload_complete = function(file, content, filepath) {
 		addQueue(content);
-		
-		if (!isPic) {
-			sendQueue();
-			//fs.unlink(filepath);
-		} else
-			sendImage(socket, filepath);
-			
+		sendQueue();
 	}
     uploader.on("complete", function (event) {
 		console.log("upload complete");
+		
 		file = event.file;
 		filepath = './' + file.pathName;
 		filepath = phpjs.str_replace('\\', '/', filepath);
@@ -201,17 +192,17 @@ io.sockets.on('connection', function (socket) {
 		}, file.size / 1024 / 2);
 
 	});
-	function checkPic(file,filepath,options){
+	var checkPic =function(file,filepath,options){
 		var dimensions = sizeOf(filepath);
-				var width = phpjs.intval(dimensions.width) / px2mm;
-				var height = phpjs.intval(dimensions.height) / px2mm;
+		var width = phpjs.intval(dimensions.width) / px2mm;
+		var height = phpjs.intval(dimensions.height) / px2mm;
 				console.log("Image width: " + dimensions.width+", height: "+ dimensions.height);
-				if (width > argv.maxCoorX || height > argv.maxCoorY || width == 0 || height == 0) {
-					io.sockets.emit('error', {
-						id: 4,
-						message: phpjs.sprintf('Only accept size less than %d x %d (px x px)', argv.maxCoorX * px2mm, argv.maxCoorY * px2mm)
-					});
-				} else {
+				// if (width > argv.maxCoorX || height > argv.maxCoorY || width == 0 || height == 0) {
+				// 	io.sockets.emit('error', {
+				// 		id: 4,
+				// 		message: phpjs.sprintf('Only accept size less than %d x %d (px x px)', argv.maxCoorX * px2mm, argv.maxCoorY * px2mm)
+				// 	});
+				// } else {
 					var image = new Jimp(filepath, function (e, image) {
 						if (e) {
 							fs.unlink(filepath);
@@ -223,14 +214,13 @@ io.sockets.on('connection', function (socket) {
 								socket.emit("percent", percent);
 							},
 							complete: function (gcode) {
-								fileaa = filepath;	 
 								__upload_complete(file, gcode, filepath);
 							}
 						});
 					});
-				}
+				// }
 	}
-	function checkSVG(file,filepath,options,isContent){
+	var checkSVG = function(file,filepath,options,isContent){
 		socket.emit("percent");
 		var content;
 		if(isContent) content = file;
@@ -249,8 +239,9 @@ io.sockets.on('connection', function (socket) {
 	socket.on('disconnect', function () {
 		socketClientCount--;
 	});
-	socket.on('start', function () {
-		start();
+	socket.on('start', function (copies) {
+		copies = copies ||1;
+		start(copies);
 	});
 	socket.on('requestQueue', function () {
 		if (!canSendImage)
@@ -281,17 +272,15 @@ io.sockets.on('connection', function (socket) {
 		io.sockets.emit("settings", argv);
 	});
 
-    socket.on('imagesize',function(size){
+    socket.on('imageResize',function(size){
 		if(size <0 || size >400 || size =='') size = 100;	
-		console.log("SizeSVg"+size);	
-		if(isPICfile){
+		if(isPICfile){ //image
 			argv.scale = size;
 			options = argv;
 			checkPic(file,filepath,options);
-		}else{
+		}else{ //svg
 			argv.scale = size;
 			options = argv;
-			console.log("SizeSVg"+size);
 			if(isConvert) checkSVG(toSVGContent,filepath,options,true);
 			else checkSVG(file,filepath,options);
 
@@ -302,25 +291,24 @@ io.sockets.on('connection', function (socket) {
     socket.on('convertToSvg',function(type){
 		if(!isPICfile && !isConvert) return;
 		var type = parseInt(type) || 0;
-		var filepaths = fileaa;
+		var fileconvert = filepath;
 		isPICfile = false;
 		isConvert = true;
 		options = argv;
-	//	console.log(options);
 		switch(type){
 			case 1:
 				var params = {
 				// threshold: 200
 				};
-				potrace.trace(filepaths, function(err, svg) {
+				potrace.trace(fileconvert, function(err, svg) {
 				if (err) {console.log("Convert error"); return;};
 				toSVGContent = svg;
-				checkSVG(toSVGContent,filepaths,options, true);
+				checkSVG(toSVGContent,fileconvert,options, true);
 				});
 				break;
 			case 2:
 				var posterizer = new potrace.Posterizer();
-				posterizer.loadImage(filepaths, function(err) {
+				posterizer.loadImage(fileconvert, function(err) {
 				if (err) {console.log("Convert error"); return;};
 				posterizer.setParameters({
 					steps: 3,
@@ -328,7 +316,7 @@ io.sockets.on('connection', function (socket) {
 					fillStrategy: potrace.Posterizer.FILL_MEAN,
 				});
 				toSVGContent = posterizer.getSVG(); 
-				checkSVG(toSVGContent,filepaths,options, true);
+				checkSVG(toSVGContent,fileconvert,options, true);
 				});
 				break;
 			case 0:
@@ -344,8 +332,8 @@ io.sockets.on('connection', function (socket) {
 		if(argv.machinehost != address){
 			argv.machinehost = address;
 			io.sockets.emit("settings", argv);
-			close();
-			open();
+			closeESP();
+			openESP();
 		}
 		
 	});
@@ -363,7 +351,7 @@ io.sockets.on('connection', function (socket) {
 	});
 	socket.on('feedRate', function (feedRate) {
 		feedRate = phpjs.intval(feedRate);
-		if (feedRate <= 1) feedRate = 1;
+		if (feedRate <= 1) feedRate = 100;
 		if (feedRate == argv.feedRate)
 			return;
 		fs.writeFile('./data/feedRate', feedRate);
@@ -380,10 +368,25 @@ io.sockets.on('connection', function (socket) {
 		replaceFeedRate(gcodeDataQueue);
 		argv.feedRate = feedRate;
 		if (argv.feedRate == 1)
-			argv.feedRate = 50;
+			argv.feedRate = 100;
 		io.sockets.emit("settings", argv);
 
 	});
+
+	socket.on('maxCoordicate', function (maxCoorX,maxCoorY) {
+		maxCoorX = phpjs.intval(maxCoorX);
+		maxCoorY = phpjs.intval(maxCoorY);
+		if (maxCoorX <= 1) maxCoorX = MAXCOOR.X;
+		if (maxCoorY <= 1) maxCoorY = MAXCOOR.Y;
+		if (maxCoorX == argv.maxCoorX && maxCoorY == argv.maxCoorY )
+			return;
+		fs.writeFile('./data/maxCoordicate', maxCoorX+","+maxCoorY);
+		argv.maxCoorX = maxCoorX;
+		argv.maxCoorY = maxCoorY;
+		io.sockets.emit("settings", argv);
+
+	});
+
     	socket.on('token', function (token, remember) {
 		tokenIndexOf = tokenDevice.indexOf(token);
 		if (tokenIndexOf == -1)
@@ -420,13 +423,31 @@ fs.readFile('./data/rememberDevice.json', function (err, data) {
 if (argv.feedRate == -1)
 	fs.readFile('./data/feedRate', function (err, data) {
 		if (err)
-			argv.feedRate = 50;
+			argv.feedRate = 100;
 		else {
 			data = phpjs.str_replace("\n", "", data);
 			console.log("Feed: "+data);
 			argv.feedRate = phpjs.intval(data);
 			if (argv.feedRate <= 1)
-				argv.feedRate = 1;
+				argv.feedRate = 100;
+		}
+	});
+
+if (argv.maxCoorX <= 0 || argv.maxCoorY<=0)
+	fs.readFile('./data/maxCoordicate', function (err, data) {
+		if (err){
+			argv.maxCoorX = MAXCOOR.X;
+			argv.maxCoorY = MAXCOOR.Y;
+		} else {
+			data = phpjs.str_replace("\n", "", data).split(",");
+			console.log("maxcoorX: "+data[0]+",maxCoorY: "+data[1]);
+			argv.maxCoorX = phpjs.intval(data[0]);
+			argv.maxCoorY = phpjs.intval(data[1]);
+			if (argv.maxCoorX <= 0)
+				argv.maxCoorX = MAXCOOR.X;
+			if (argv.maxCoorY <= 0)
+				argv.maxCoorY = MAXCOOR.Y;
+
 		}
 	});
 
@@ -516,12 +537,15 @@ function sendPushNotification(message) {
 	exec(command);
 }
 
-function start() {	
+function start(copies) {	
 	machineRunning	= true;
 	machinePause	= false;
+	
 	console.log("machine is running!");
 	timer2 = phpjs.time();
-	copiesDrawing = 1;
+	copies = phpjs.intval(copies);
+	if(copies <=1) copies = 1;
+	copiesDrawing = copies;
 	if (gcodeQueue.isEmpty() && gcodeDataQueue.length > 0)
 		gcodeQueue = new Deque(gcodeDataQueue.toArray());
 	write2serial_direct("~\n");
@@ -619,7 +643,7 @@ function receiveData(data) {
 		data = phpjs.str_replace(['<', '>', 'WPos', 'MPos', ':', "", "\n"], '', data);
 		var data_array = phpjs.explode(',', data);
 		laserPos.set(phpjs.floatval(data_array[1]), phpjs.floatval(data_array[2]));
-		io.sockets.emit('position', data_array, machineRunning, machinePause,1);
+		io.sockets.emit('position', data_array, machineRunning, machinePause,copiesDrawing);
 		var __minDistance = minDistance;
 		if (canSendImage)
 			__minDistance <<= 8; //*2^8
@@ -656,7 +680,6 @@ function receiveData(data) {
 	} else if (data.indexOf('error') > -1) {
 		__sent_count--;
 		currentQueue--;
-		//console.log("data: "+data);
 		io.sockets.emit('error', { id: 2, message: data });
 	} else {
 		io.sockets.emit('data', data);
@@ -692,7 +715,6 @@ function saveRememberDevice(list) {
 
 function __preProcessWrite2Serial() {
 	var command = [];
-	var func;
 	var i = 0;
 	var length = 0;
 	do {
@@ -708,18 +730,15 @@ function __preProcessWrite2Serial() {
 		var ele = __serial_queue.shift();
 		command.push(ele.command);
 		length += phpjs.strlen(ele.command);
-		func = ele.func;
-
 		i++;
-	} while (!func);
-
+	} while (true);
+	//console.log("over");
 	command = command.join('');
 
 	return {
 		sent_count: i,
 		command: command,
 		length: length,
-		func: func
 	};
 }
 
@@ -735,21 +754,17 @@ function __write2serial(free) {
 	var length = __preProcessQueue.length;
 	var func = __preProcessQueue.func;
 	var command = __preProcessQueue.command;
-	// console.log("L: " +length);
-	// console.log("SC: " +__sent_count);
 	__preProcessQueue.command = "";
-	sendGcode("ESP8266", command);
+	sendGcode(command);
 
 }
 
 var __lastCommand = "";
-function write2serial(command, func) {
-   // console.log("func: "+ func);
+function write2serial(command) {
 	if (__lastCommand != command || phpjs.strlen(command) < 215) {
 		//add command to serial queue		
 		__serial_queue.push({
-			'command': command + "\n",
-			'func': func
+			'command': command + "\n"
 		});
 
 		if (__serial_free)
@@ -759,12 +774,11 @@ function write2serial(command, func) {
 
 function write2serial_direct(command) {
 	__sent_count_direct++;
-	sendGcode("ESP8266", command);
+	sendGcode(command);
 }
 
-var buffer ='';
 
-var open = function() {
+var openESP = function() {
 		var url = argv.machinehost;
 		ws = new W3CWebSocket('ws://'+url);
 		ws.onopen = onOpen;
@@ -772,111 +786,85 @@ var open = function() {
 		ws.onmessage = onMessage;
 		ws.onerror = onError;
 	}
-var close = function() {
+var closeESP = function() {
 		if (ws) {
 			console.log('CLOSING ...');
 			ws.close();
 		}
 	}
 var onOpen = function() {
-		console.log('Connect to machine');
-		var interval = setInterval(function () {
+	console.log('Connected to machine');
+	var interval = setInterval(function () {
 		//increase the max element in the queue
-		write2serial("");
 		setTimeout(function () {
-			sendGcode("ESP8266","?");
+			sendGcode("?");
 		});
-
 	}, intervalTime3);
-
-	///
-		ws.onmessage  = onMessage;
-	};
+	ws.onmessage  = onMessage;
+};
 var onClose = function() {
 		console.log('close machine');
 		ws = null;
 	};
-	
+var buffer ='';	
 var onMessage = function(e) {
-		var data = "";
-		if (e.data instanceof ArrayBuffer) {
-			var bytes = new Uint8Array(e.data);
-			for (var i = 0; i < bytes.length; i++) {
-				data += String.fromCharCode(bytes[i]);
-			}
-		} else {
-			data = e.data;
+	var data = '';
+	if (e.data instanceof ArrayBuffer) {
+		var bytes = new Uint8Array(e.data);
+		for (var i = 0; i < bytes.length; i++) {
+			data += String.fromCharCode(bytes[i]);
 		}
-		buffer += data
-		var split = buffer.split("\n");
-		buffer = split.pop(); //last not fin data back to buffer
-		for (i = 0; i < split.length; i++) {
-			var response = split[i];
-			// trigger line handling event here
-			if (response.indexOf("ok") != -1 || response == "start\r" || response.indexOf('<') == 0) {
-				receiveData(response);
-			}
+	} else {
+		data = e.data;
+	}
+	buffer += data;
+	var split = buffer.split("\n");
+	
+	buffer = split.pop(); //last not fin data back to buffer
+	for (i = 0; i < split.length; i++) {
+		var response = split[i];
+		// trigger line handling event here
+		if (response.indexOf("ok") != -1 || response == "start\r" || response.indexOf('<') == 0) {
+			receiveData(response);
 		}
+	}
 };
 
 var onError = function(event) {
-		console.log("Can not connect to machine");
-	}
+	console.log("Can not connect to machine");
+}
 
-
-var AT_interval1 = setInterval(function () {
-	write2serial("?");
-	if (is_running() && phpjs.time() - timer1 > intervalTime1)
-		io.sockets.emit("error", { id: 0, message: 'Long time to wait ok response' });
-}, intervalTime1);
-
-var AT_interval4 = setInterval(function () {
-	//serverLoad	= phpjs.trim(sh.exec("uptime | awk '{ print $10 }' | cut -c1-4").stdout);
-	//tempGalileo	= phpjs.intval(sh.exec("cat /sys/class/thermal/thermal_zone0/temp | cut -c1-2").stdout);
-	serverLoad = 10;
-	tempGalileo = 10;
-	//exec("echo '" + serverLoad + "' >> ./upload/sl.log");
-	// if (fan) {
-	// 	if (fan.isOn) {
-	// 		if (tempGalileo <= minCPUTemp) {
-	// 			fan.off();
-	// 		}
-	// 	} else {
-	// 		if (tempGalileo > maxCPUTemp) {
-	// 			fan.on();
-	// 		}
-	// 	}
-	// }
-	io.sockets.emit("system_log", {
-		'serverLoad': serverLoad,
-		'tempGalileo': tempGalileo
-	});
-}, intervalTime4);
-  var sizeof = require('object-sizeof');
-
-function sendGcode(connect, gcode) {
+function sendGcode(gcode) {
 	if (gcode) {
-		var connectVia = connect;
-		if (connectVia == "USB") {
-			socket.emit('serialSend', gcode);
-		} else if (connectVia == "Ethernet") {
-			runCommand(gcode);
-		} else if (connectVia == "ESP8266") {
-			if (ws) {
-				if (ws.readyState == '1') {
-					//console.log("Type: "+sizeof(gcode)+", "+gcode);
-					ws.send(gcode);
-				} else {
-					// console.log("Unable to send gcode: Not connected to Websocket: " + gcode, errorcolor, "wifi");
-				}
+		if(ws){			
+			if (ws.readyState == '1') {
+				ws.send(gcode);
 			} else {
-				//  console.log("Unable to send gcode: Not connected: " + gcode, errorcolor, "wifi");
+				console.log("Unable to send gcode. Not connected to Websocket");
 			}
 		}
 	}
 }
 
+var grblStatus = setInterval(function () {
+	write2serial("?");
+	if (is_running() && phpjs.time() - timer1 > intervalTime1){
+		write2serial_direct("~\n");
+		//write2serial_direct("M5\n");
+		//write2serial_direct("G0X0Y0\n");
+	}
+}, intervalTime1);
 
-
+var serverInfo = setInterval(function () {
+	//serverLoad	= phpjs.trim(sh.exec("uptime | awk '{ print $10 }' | cut -c1-4").stdout);
+	//tempGalileo	= phpjs.intval(sh.exec("cat /sys/class/thermal/thermal_zone0/temp | cut -c1-2").stdout);
+	serverLoad = 10+Math.random()*100;
+	console.log(serverLoad);
+	tempGalileo = 10;
+	io.sockets.emit("system_log", {
+		'serverLoad': serverLoad,
+		'tempGalileo': tempGalileo
+	});
+}, intervalTime4);
 
 console.log('Server runing port 9090');
